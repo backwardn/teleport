@@ -44,6 +44,7 @@ type ResourceKind string
 type ResourceCommand struct {
 	config      *service.Config
 	ref         services.Ref
+	refs        services.Refs
 	format      string
 	namespace   string
 	withSecrets bool
@@ -62,8 +63,9 @@ type ResourceCommand struct {
 
 const getHelp = `Examples:
 
-  $ tctl get clusters      : prints the list of all trusted clusters
-  $ tctl get cluster/east  : prints the trusted cluster 'east'
+  $ tctl get clusters       : prints the list of all trusted clusters
+  $ tctl get cluster/east   : prints the trusted cluster 'east'
+  $ tctl get clusters,users : prints all trusted clusters and all users
 
 Same as above, but using JSON output:
 
@@ -94,7 +96,7 @@ func (rc *ResourceCommand) Initialize(app *kingpin.Application, config *service.
 	$ tctl rm cluster/main`).SetValue(&rc.ref)
 
 	rc.getCmd = app.Command("get", "Print a YAML declaration of various Teleport resources")
-	rc.getCmd.Arg("resource", "Resource spec: 'type/[name]'").SetValue(&rc.ref)
+	rc.getCmd.Arg("resources", "Resource spec: 'type/[name][,...]'").Required().SetValue(&rc.refs)
 	rc.getCmd.Flag("format", "Output format: 'yaml', 'json' or 'text'").Default(formatYAML).StringVar(&rc.format)
 	rc.getCmd.Flag("namespace", "Namespace of the resources").Hidden().Default(defaults.Namespace).StringVar(&rc.namespace)
 	rc.getCmd.Flag("with-secrets", "Include secrets in resources like certificate authorities or OIDC connectors").Default("false").BoolVar(&rc.withSecrets)
@@ -134,6 +136,10 @@ func (rc *ResourceCommand) GetRef() services.Ref {
 
 // Get prints one or many resources of a certain type
 func (rc *ResourceCommand) Get(client auth.ClientI) error {
+	if len(rc.refs) != 1 {
+		return rc.GetMany(client)
+	}
+	rc.ref = rc.refs[0]
 	collection, err := rc.getCollection(client)
 	if err != nil {
 		return trace.Wrap(err)
@@ -150,6 +156,25 @@ func (rc *ResourceCommand) Get(client auth.ClientI) error {
 		return collection.writeJSON(os.Stdout)
 	}
 	return trace.BadParameter("unsupported format")
+}
+
+func (rc *ResourceCommand) GetMany(client auth.ClientI) error {
+	if rc.format != formatYAML {
+		return trace.BadParameter("mixed resource types only support YAML formatting")
+	}
+	var resources []services.Resource
+	for _, ref := range rc.refs {
+		rc.ref = ref
+		collection, err := rc.getCollection(client)
+		if err != nil {
+			return trace.Wrap(err)
+		}
+		resources = append(resources, collection.resources()...)
+	}
+	if err := utils.WriteYAML(os.Stdout, resources); err != nil {
+		return trace.Wrap(err)
+	}
+	return nil
 }
 
 // Create updates or inserts one or many resources

@@ -476,6 +476,83 @@ message BoolValue {
     bool Value = 1;
 }
 
+// OTPVerifierV1 is the resource specification for a One Time Password verifier
+// for user authentication
+message OTPVerifierV1  {
+    option (gogoproto.goproto_stringer) = false;
+    option (gogoproto.stringer) = false;
+
+    // Kind is a resource kind
+    string Kind = 1 [(gogoproto.jsontag) = "kind"];
+    // SubKind is an optional resource sub kind, used in some resources
+	string SubKind = 2 [(gogoproto.jsontag) = "sub_kind,omitempty"];
+	// Version is version
+    string Version = 3 [(gogoproto.jsontag) = "version"];
+	// Metadata is resource metadata
+    Metadata Metadata = 4 [(gogoproto.nullable) = false, (gogoproto.jsontag) = "metadata"];
+    // Spec is an OTP resource specification
+    OTPVerifierSpecV1 Spec = 5 [(gogoproto.nullable) = false, (gogoproto.jsontag) = "spec"];
+}
+
+// OTPVerifierSpecV1 encodes the necessary information to authenticate a user
+// via One Time Password
+message OTPVerifierSpecV1 {
+    // Secret key used for OTP verification
+    string OTPKey = 1 [(gogoproto.jsontag) = "otp_key"];
+}
+
+// U2FRegistrationV1 is the resource specification for a universal second factor auth registration.
+message U2FRegistrationV1  {
+    option (gogoproto.goproto_stringer) = false;
+    option (gogoproto.stringer) = false;
+
+    // Kind is a resource kind
+    string Kind = 1 [(gogoproto.jsontag) = "kind"];
+    // SubKind is an optional resource sub kind, used in some resources
+	string SubKind = 2 [(gogoproto.jsontag) = "sub_kind,omitempty"];
+	// Version is version
+    string Version = 3 [(gogoproto.jsontag) = "version"];
+	// Metadata is resource metadata
+    Metadata Metadata = 4 [(gogoproto.nullable) = false, (gogoproto.jsontag) = "metadata"];
+    // Spec is an U2F resource specification
+    U2FRegistrationSpecV1 Spec = 5 [(gogoproto.nullable) = false, (gogoproto.jsontag) = "spec"];
+}
+
+// U2FRegistrationSpecV1 encodes the universal second factor registration payload.
+message U2FRegistrationSpecV1 {
+    // Raw is the serialized registration data as received from the token
+    bytes Raw = 1 [(gogoproto.jsontag) = "raw"];
+
+    // KeyHandle uniquely identifies a key on a device
+    bytes KeyHandle = 2 [(gogoproto.jsontag) = "key_handle"];
+
+    // PubKey is an DER encoded ecdsa public key
+    bytes PubKey = 3 [(gogoproto.jsontag) = "pubkey"];
+}
+
+// U2FRegistrationCounterV1 is the resource specification for a universal second factor auth registration counter.
+message U2FRegistrationCounterV1  {
+    option (gogoproto.goproto_stringer) = false;
+    option (gogoproto.stringer) = false;
+
+    // Kind is a resource kind
+    string Kind = 1 [(gogoproto.jsontag) = "kind"];
+    // SubKind is an optional resource sub kind, used in some resources
+	string SubKind = 2 [(gogoproto.jsontag) = "sub_kind,omitempty"];
+	// Version is version
+    string Version = 3 [(gogoproto.jsontag) = "version"];
+	// Metadata is resource metadata
+    Metadata Metadata = 4 [(gogoproto.nullable) = false, (gogoproto.jsontag) = "metadata"];
+    // Spec encodes the counter value
+    U2FRegistrationCounterSpecV1 Spec = 5 [(gogoproto.nullable) = false, (gogoproto.jsontag) = "spec"];
+}
+
+// U2FRegistrationCounterSpecV1 encodes the universal second factor registration counter.
+message U2FRegistrationCounterSpecV1 {
+    // Counter encodes the most recently seen u2f counter value
+    uint32 Counter = 1 [(gogoproto.jsontag) = "counter"];
+}
+
 // UserV2 is version 2 resource spec of the user
 message UserV2  {
     option (gogoproto.goproto_stringer) = false;

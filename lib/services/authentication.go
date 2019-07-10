@@ -17,6 +17,8 @@ limitations under the License.
 package services
 
 import (
+	"crypto/ecdsa"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -26,6 +28,9 @@ import (
 	"github.com/gravitational/teleport/lib/utils"
 
 	"github.com/gravitational/trace"
+	"github.com/jonboulle/clockwork"
+	"github.com/pquerna/otp/totp"
+	"github.com/tstranex/u2f"
 )
 
 // AuthPreference defines the authentication preferences for a specific
@@ -342,4 +347,494 @@ func (t *TeleportAuthPreferenceMarshaler) Unmarshal(bytes []byte, opts ...Marsha
 // Marshal marshals role to JSON or YAML.
 func (t *TeleportAuthPreferenceMarshaler) Marshal(c AuthPreference, opts ...MarshalOption) ([]byte, error) {
 	return json.Marshal(c)
+}
+
+// OTPVerifier is a one time password verifier for a specific user.
+type OTPVerifier interface {
+	// Resource sets common resource properties
+	Resource
+	// GetUser gets the username assocaited with this verifier
+	GetUser() string
+	// GetOTPKey gets the secret key associated with this verifier
+	GetOTPKey() string
+	// Check checks if all passed parameters are valid
+	Check() error
+	// CheckAndSetDefaults checks and sets default values for any missing fields.
+	CheckAndSetDefaults() error
+}
+
+// NewOTPVerifier creates a new OTPVerifier resource.
+//
+// NOTE: This function always creates OTPVerifiers of subkind `teleport.TOTP`
+// since all other OTP subkinds are deprecated
+func NewOTPVerifier(user string, key string) OTPVerifier {
+	return &OTPVerifierV1{
+		Kind:    KindOTPVerifier,
+		Version: V1,
+		SubKind: teleport.TOTP,
+		Metadata: Metadata{
+			Name:      user,
+			Namespace: defaults.Namespace,
+		},
+		Spec: OTPVerifierSpecV1{
+			OTPKey: key,
+		},
+	}
+}
+
+// GetUser gets the username assocaited with this verifier
+func (o *OTPVerifierV1) GetUser() string {
+	return o.Metadata.Name
+}
+
+// GetOTPKey gets the secret key associated with this verifier
+func (o *OTPVerifierV1) GetOTPKey() string {
+	return o.Spec.OTPKey
+}
+
+// Check checks if all passed parameters are valid
+func (o *OTPVerifierV1) Check() error {
+	if o.GetUser() == "" {
+		return trace.BadParameter("missing user name")
+	}
+	switch kind := o.GetSubKind(); kind {
+	case teleport.TOTP:
+		_, err := totp.GenerateCode(o.GetOTPKey(), time.Time{})
+		if err != nil {
+			return trace.BadParameter("invalid TOTP key")
+		}
+	case teleport.HOTP:
+		return trace.BadParameter("hash-based OTP has been deprecated")
+	default:
+		return trace.BadParameter("unsupported OTP kind %v", kind)
+	}
+	return nil
+}
+
+// CheckAndSetDefaults checks and sets default values for any missing fields.
+func (o *OTPVerifierV1) CheckAndSetDefaults() error {
+	if err := o.Metadata.CheckAndSetDefaults(); err != nil {
+		return trace.Wrap(err)
+	}
+	// Assume subkind of TOTP if unset
+	if o.GetSubKind() == "" {
+		o.SetSubKind(teleport.TOTP)
+	}
+	if err := o.Check(); err != nil {
+		return trace.Wrap(err)
+	}
+	return nil
+}
+
+// GetKind returns resource kind
+func (o *OTPVerifierV1) GetKind() string {
+	return o.Kind
+}
+
+// GetSubKind returns resource subkind
+func (o *OTPVerifierV1) GetSubKind() string {
+	return o.SubKind
+}
+
+// SetSubKind sets resource subkind
+func (o *OTPVerifierV1) SetSubKind(subkind string) {
+	o.SubKind = subkind
+}
+
+// GetVersion returns resource version
+func (o *OTPVerifierV1) GetVersion() string {
+	return o.Version
+}
+
+// GetName returns the name of the resource
+func (o *OTPVerifierV1) GetName() string {
+	return o.Metadata.GetName()
+}
+
+// SetName sets the name of the resource
+func (o *OTPVerifierV1) SetName(name string) {
+	o.Metadata.SetName(name)
+}
+
+// Expiry returns object expiry setting
+func (o *OTPVerifierV1) Expiry() time.Time {
+	return o.Metadata.Expiry()
+}
+
+// SetExpiry sets object expiry
+func (o *OTPVerifierV1) SetExpiry(expiry time.Time) {
+	o.Metadata.SetExpiry(expiry)
+}
+
+// SetTTL sets Expires header using current clock
+func (o *OTPVerifierV1) SetTTL(clock clockwork.Clock, ttl time.Duration) {
+	o.Metadata.SetTTL(clock, ttl)
+}
+
+// GetMetadata returns object metadata
+func (o *OTPVerifierV1) GetMetadata() Metadata {
+	return o.Metadata.GetMetadata()
+}
+
+// GetResourceID returns resource ID
+func (o *OTPVerifierV1) GetResourceID() int64 {
+	return o.Metadata.GetID()
+}
+
+// SetResourceID sets resource ID
+func (o *OTPVerifierV1) SetResourceID(id int64) {
+	o.Metadata.SetID(id)
+}
+
+// String returns human readable version of OTPVerifierV1
+func (o *OTPVerifierV1) String() string {
+	return fmt.Sprintf("OTPVerifier(user=%v)", o.GetUser())
+}
+
+// OTPVerifierMarshaler implements marshal/unmarshal of OTPVerifier implementations.
+type OTPVerifierMarshaler interface {
+	Marshal(OTPVerifier, ...MarshalOption) ([]byte, error)
+	Unmarshal([]byte, ...MarshalOption) (OTPVerifier, error)
+}
+
+func GetOTPVerifierMarshaler() OTPVerifierMarshaler {
+	return &otpVerifierMarshaler{}
+}
+
+type otpVerifierMarshaler struct{}
+
+func (_ *otpVerifierMarshaler) Marshal(verifier OTPVerifier, opts ...MarshalOption) ([]byte, error) {
+	cfg, err := collectOptions(opts)
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+	switch v := verifier.(type) {
+	case *OTPVerifierV1:
+		if !cfg.PreserveResourceID {
+			// avoid modifying original object
+			cp := *v
+			cp.SetResourceID(0)
+			v = &cp
+		}
+		bytes, err := utils.FastMarshal(v)
+		if err != nil {
+			return nil, trace.Wrap(err)
+		}
+		return bytes, nil
+	default:
+		return nil, trace.NotImplemented("unknown otp verifier type %T", verifier)
+	}
+}
+
+func (_ *otpVerifierMarshaler) Unmarshal(bytes []byte, opts ...MarshalOption) (OTPVerifier, error) {
+	var verifier OTPVerifierV1
+
+	if len(bytes) == 0 {
+		return nil, trace.BadParameter("missing resource data")
+	}
+
+	cfg, err := collectOptions(opts)
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+
+	if cfg.SkipValidation {
+		if err := utils.FastUnmarshal(bytes, &verifier); err != nil {
+			return nil, trace.BadParameter(err.Error())
+		}
+	} else {
+		err := utils.UnmarshalWithSchema(GetOTPVerifierSchema(), &verifier, bytes)
+		if err != nil {
+			return nil, trace.BadParameter(err.Error())
+		}
+	}
+	if cfg.ID != 0 {
+		verifier.SetResourceID(cfg.ID)
+	}
+	if !cfg.Expires.IsZero() {
+		verifier.SetExpiry(cfg.Expires)
+	}
+	return &verifier, nil
+}
+
+// GetOTPVerifierSchema returns JSON schema for one time password verifier resource.
+func GetOTPVerifierSchema() string {
+	return fmt.Sprintf(V2SchemaTemplate, MetadataSchema, OTPVerifierSpecSchemaV1, DefaultDefinitions)
+}
+
+// OTPVerifierSpecSchemaV1 is a JSON schema for one time password verifier spec.
+const OTPVerifierSpecSchemaV1 = `{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["otp_key"],
+  "properties": {
+    "otp_key": {"type": "string"}
+  }
+}`
+
+// U2FRegistration is a universal second factor auth registration for a specific user.
+type U2FRegistration interface {
+	// Resource sets common resource properties
+	Resource
+	// GetUser gets the username assocaited with this registration
+	GetUser() string
+	// GetRawRegistration gets the raw u2f registration data
+	GetRawRegistration() []byte
+	// GetKeyHandle gets the u2f key idenification handle
+	GetKeyHandle() []byte
+	// GetPubKeyDER gets the DER encoded public key associated with this registration
+	GetPubKeyDER() []byte
+	// GetPubKeyECDSA gets the public key as an `ecdsa.PublicKey`.
+	GetPubKeyECDSA() (*ecdsa.PublicKey, error)
+	// Check checks the provided parameters
+	Check() error
+	// CheckAndSetDefaults checks and sets default values for any missing fields
+	CheckAndSetDefaults() error
+}
+
+func TransposeU2FRegistration(user string, r u2f.Registration) (U2FRegistration, error) {
+	pubKeyDer, err := x509.MarshalPKIXPublicKey(&r.PubKey)
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+	reg := NewU2FRegistration(user, r.Raw, r.KeyHandle, pubKeyDer)
+	if err := reg.Check(); err != nil {
+		return nil, trace.Wrap(err)
+	}
+	return reg, nil
+}
+
+// NewU2FRegistration creates a new U2FRegistration resource.
+//
+func NewU2FRegistration(user string, raw, keyHandle, pubKey []byte) U2FRegistration {
+	return &U2FRegistrationV1{
+		Kind:    KindU2FRegistration,
+		Version: V1,
+		Metadata: Metadata{
+			Name:      user,
+			Namespace: defaults.Namespace,
+		},
+		Spec: U2FRegistrationSpecV1{
+			Raw:       raw,
+			KeyHandle: keyHandle,
+			PubKey:    pubKey,
+		},
+	}
+}
+
+// GetUser gets the username assocaited with this registration
+func (r *U2FRegistrationV1) GetUser() string {
+	return r.Metadata.Name
+}
+
+// GetRawRegistration gets the raw u2f registration data
+func (r *U2FRegistrationV1) GetRawRegistration() []byte {
+	return r.Spec.Raw
+}
+
+// GetKeyHandle gets the u2f key idenification handle
+func (r *U2FRegistrationV1) GetKeyHandle() []byte {
+	return r.Spec.KeyHandle
+}
+
+// GetPubKeyDER gets the DER encoded public key associated with this registration
+func (r *U2FRegistrationV1) GetPubKeyDER() []byte {
+	return r.Spec.PubKey
+}
+
+// GetPubKeyECDSA gets the public key as an `ecdsa.PublicKey`.
+func (r *U2FRegistrationV1) GetPubKeyECDSA() (*ecdsa.PublicKey, error) {
+	pubKeyI, err := x509.ParsePKIXPublicKey(r.GetPubKeyDER())
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+	pubKey, ok := pubKeyI.(*ecdsa.PublicKey)
+	if !ok {
+		return nil, trace.Errorf("expected *ecdsa.PublicKey, got %T", pubKeyI)
+	}
+	return pubKey, nil
+}
+
+// Check checks if all passed parameters are valid
+func (r *U2FRegistrationV1) Check() error {
+	if r.GetUser() == "" {
+		return trace.BadParameter("missing user name")
+	}
+	if len(r.GetKeyHandle()) < 1 {
+		return trace.BadParameter("missing u2f key handle")
+	}
+	if len(r.GetPubKeyDER()) < 1 {
+		return trace.BadParameter("missing u2f pubkey")
+	}
+	if r.Kind != KindU2FRegistration {
+		return trace.BadParameter("expected kind %q, got %q", KindU2FRegistration, r.Kind)
+	}
+	if _, err := r.GetPubKeyECDSA(); err != nil {
+		return trace.Wrap(err, "bad u2f pubkey")
+	}
+	return nil
+}
+
+// CheckAndSetDefaults checks and sets default values for any missing fields.
+func (r *U2FRegistrationV1) CheckAndSetDefaults() error {
+	if err := r.Metadata.CheckAndSetDefaults(); err != nil {
+		return trace.Wrap(err)
+	}
+	if err := r.Check(); err != nil {
+		return trace.Wrap(err)
+	}
+	return nil
+}
+
+// GetKind returns resource kind
+func (r *U2FRegistrationV1) GetKind() string {
+	return r.Kind
+}
+
+// GetSubKind returns resource subkind
+func (r *U2FRegistrationV1) GetSubKind() string {
+	return r.SubKind
+}
+
+// SetSubKind sets resource subkind
+func (r *U2FRegistrationV1) SetSubKind(subkind string) {
+	r.SubKind = subkind
+}
+
+// GetVersion returns resource version
+func (r *U2FRegistrationV1) GetVersion() string {
+	return r.Version
+}
+
+// GetName returns the name of the resource
+func (r *U2FRegistrationV1) GetName() string {
+	return r.Metadata.GetName()
+}
+
+// SetName sets the name of the resource
+func (r *U2FRegistrationV1) SetName(name string) {
+	r.Metadata.SetName(name)
+}
+
+// Expiry returns object expiry setting
+func (r *U2FRegistrationV1) Expiry() time.Time {
+	return r.Metadata.Expiry()
+}
+
+// SetExpiry sets object expiry
+func (r *U2FRegistrationV1) SetExpiry(expiry time.Time) {
+	r.Metadata.SetExpiry(expiry)
+}
+
+// SetTTL sets Expires header using current clock
+func (r *U2FRegistrationV1) SetTTL(clock clockwork.Clock, ttl time.Duration) {
+	r.Metadata.SetTTL(clock, ttl)
+}
+
+// GetMetadata returns object metadata
+func (r *U2FRegistrationV1) GetMetadata() Metadata {
+	return r.Metadata.GetMetadata()
+}
+
+// GetResourceID returns resource ID
+func (r *U2FRegistrationV1) GetResourceID() int64 {
+	return r.Metadata.GetID()
+}
+
+// SetResourceID sets resource ID
+func (r *U2FRegistrationV1) SetResourceID(id int64) {
+	r.Metadata.SetID(id)
+}
+
+// String returns human readable version of U2FRegistrationV1
+func (r *U2FRegistrationV1) String() string {
+	return fmt.Sprintf("U2FRegistration(user=%v)", r.GetUser())
+}
+
+// U2FRegistrationMarshaler implements marshal/unmarshal of U2FRegistration implementations.
+type U2FRegistrationMarshaler interface {
+	Marshal(U2FRegistration, ...MarshalOption) ([]byte, error)
+	Unmarshal([]byte, ...MarshalOption) (U2FRegistration, error)
+}
+
+func GetU2FRegistrationMarshaler() U2FRegistrationMarshaler {
+	return &u2fRegistrationMarshaler{}
+}
+
+type u2fRegistrationMarshaler struct{}
+
+func (_ *u2fRegistrationMarshaler) Marshal(registration U2FRegistration, opts ...MarshalOption) ([]byte, error) {
+	cfg, err := collectOptions(opts)
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+	switch r := registration.(type) {
+	case *U2FRegistrationV1:
+		if !cfg.PreserveResourceID {
+			// avoid modifying original object
+			cp := *r
+			cp.SetResourceID(0)
+			r = &cp
+		}
+		bytes, err := utils.FastMarshal(r)
+		if err != nil {
+			return nil, trace.Wrap(err)
+		}
+		return bytes, nil
+	default:
+		return nil, trace.NotImplemented("unknown u2f registration type %T", registration)
+	}
+}
+
+func (_ *u2fRegistrationMarshaler) Unmarshal(bytes []byte, opts ...MarshalOption) (U2FRegistration, error) {
+	var registration U2FRegistrationV1
+
+	if len(bytes) == 0 {
+		return nil, trace.BadParameter("missing resource data")
+	}
+
+	cfg, err := collectOptions(opts)
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+
+	if cfg.SkipValidation {
+		if err := utils.FastUnmarshal(bytes, &registration); err != nil {
+			return nil, trace.BadParameter(err.Error())
+		}
+	} else {
+		err := utils.UnmarshalWithSchema(GetU2FRegistrationSchema(), &registration, bytes)
+		if err != nil {
+			return nil, trace.BadParameter(err.Error())
+		}
+	}
+	if cfg.ID != 0 {
+		registration.SetResourceID(cfg.ID)
+	}
+	if !cfg.Expires.IsZero() {
+		registration.SetExpiry(cfg.Expires)
+	}
+	return &registration, nil
+}
+
+// GetU2FRegistrationSchema returns JSON schema for u2f registration resource.
+func GetU2FRegistrationSchema() string {
+	return fmt.Sprintf(V2SchemaTemplate, MetadataSchema, U2FRegistrationSpecSchemaV1, DefaultDefinitions)
+}
+
+// U2FRegistrationSpecSchemaV1 is a JSON schema for universal second factor registration spec.
+const U2FRegistrationSpecSchemaV1 = `{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["raw","key_handle","pubkey"],
+  "properties": {
+    "raw": {"type": "string"},
+	"key_handle": {"type": "string"},
+	"pubkey": {"type": "string"}
+  }
+}`
+
+// FIXME
+func (r *U2FRegistrationCounterV1) String() string {
+	return fmt.Sprintf("U2FRegistrationCounter(user=%q,count=%v)", r.Metadata.Name, r.Spec.Counter)
 }

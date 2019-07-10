@@ -33,6 +33,7 @@ import (
 	"github.com/gravitational/teleport/lib/defaults"
 	"github.com/gravitational/teleport/lib/events"
 	"github.com/gravitational/teleport/lib/services"
+	"github.com/gravitational/teleport/lib/services/local"
 	"github.com/gravitational/teleport/lib/sshca"
 	"github.com/gravitational/teleport/lib/sshutils"
 	"github.com/gravitational/teleport/lib/tlsca"
@@ -69,6 +70,9 @@ type InitConfig struct {
 	// Authorities is a list of pre-configured authorities to supply on first start
 	Authorities []services.CertAuthority
 
+	// Resources is a list of previously backed-up resources used to
+	// bootstrap backend on first start.
+	Resources []services.Resource
 	// AuthServiceName is a human-readable name of this CA. If several Auth services are running
 	// (managing multiple teleport clusters) this field is used to tell them apart in UIs
 	// It usually defaults to the hostname of the machine the Auth service runs on.
@@ -152,6 +156,23 @@ func Init(cfg InitConfig, opts ...AuthServerOption) (*AuthServer, error) {
 	asrv, err := NewAuthServer(&cfg, opts...)
 	if err != nil {
 		return nil, trace.Wrap(err)
+	}
+
+	// if resources are supplied, use them to bootstrap backend state
+	// on initial startup.
+	if len(cfg.Resources) > 0 {
+		firstStart, err := isFirstStart(asrv, cfg)
+		if err != nil {
+			return nil, trace.Wrap(err)
+		}
+		if firstStart {
+			log.Infof("Applying %v bootstrap resources (first initialization)", len(cfg.Resources))
+			if err := local.CreateResources(context.TODO(), cfg.Backend, cfg.Resources...); err != nil {
+				return nil, trace.Wrap(err, "backend bootstrap failed")
+			}
+		} else {
+			log.Warnf("Ignoring %v bootstrap resources (previously initialized)", len(cfg.Resources))
+		}
 	}
 
 	// Set the ciphersuites that this auth server supports.
