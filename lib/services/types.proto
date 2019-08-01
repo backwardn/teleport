@@ -553,6 +553,29 @@ message U2FRegistrationCounterSpecV1 {
     uint32 Counter = 1 [(gogoproto.jsontag) = "counter"];
 }
 
+// PasswordHashV1 is the resource specification for a user password hash.
+message PasswordHashV1  {
+    option (gogoproto.goproto_stringer) = false;
+    option (gogoproto.stringer) = false;
+
+    // Kind is a resource kind
+    string Kind = 1 [(gogoproto.jsontag) = "kind"];
+    // SubKind is an optional resource sub kind, used in some resources
+	string SubKind = 2 [(gogoproto.jsontag) = "sub_kind,omitempty"];
+	// Version is version
+    string Version = 3 [(gogoproto.jsontag) = "version"];
+	// Metadata is resource metadata
+    Metadata Metadata = 4 [(gogoproto.nullable) = false, (gogoproto.jsontag) = "metadata"];
+    // Spec is password hash resource specification
+    PasswordHashSpecV1 Spec = 5 [(gogoproto.nullable) = false, (gogoproto.jsontag) = "spec"];
+}
+
+// PasswordHashSpecV1 encodes the hash of a user's password.
+message PasswordHashSpecV1 {
+    // Value of the password hash
+    bytes Hash = 1 [(gogoproto.jsontag) = "hash"];
+}
+
 // UserV2 is version 2 resource spec of the user
 message UserV2  {
     option (gogoproto.goproto_stringer) = false;

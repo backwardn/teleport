@@ -102,6 +102,25 @@ message UserCertsRequest {
     string RouteToCluster = 5 [(gogoproto.jsontag) = "route_to_cluster,omitempty"];
 }
 
+// Resource is a message which contains one of a set of possible
+// resource types.  This message is intended for use in APIs which act
+// directly on the resource API, rather than on a specific resource type.
+message Resource {
+    oneof Resource {
+        services.UserV2 User = 1 [(gogoproto.jsontag) = "user,omitempty"];
+        services.CertAuthorityV2 CertAuthority = 2 [(gogoproto.jsontag) = "cert_authority,omitempty"];
+        //services.TrustedClusterV2 TrustedCluster = 3;
+        //services.GithubConnectorV3 GithubConnector = 4;
+        services.RoleV3 Role = 5 [(gogoproto.jsontag) = "role,omitempty"];
+        //services.OIDCConnectorV2 OIDCConnector = 6;
+        //services.SAMLConnectorV2 SAMLConnector = 7;
+        services.OTPVerifierV1 OTPVerifier = 8 [(gogoproto.jsontag) = "otp_verifier,omitempty"];
+        services.U2FRegistrationV1 U2FRegistration = 9 [(gogoproto.jsontag) = "u2f_registration,omitempty"];
+        services.U2FRegistrationCounterV1 U2FRegistrationCounter = 10 [(gogoproto.jsontag) = "u2f_registration_counter,omitempty"];
+        services.PasswordHashV1 PasswordHash = 11 [(gogoproto.jsontag) = "password_hash,omitempty"];
+    }
+}
+
 // AuthService is authentication/authorization service implementation
 service AuthService {
     // SendKeepAlives allows node to send a stream of keep alive requests
@@ -113,3 +132,4 @@ service AuthService {
     // GenerateUserCerts generates a set of user certificates for use by `tctl auth sign`.
     rpc GenerateUserCerts(UserCertsRequest) returns (Certs);
 }
+

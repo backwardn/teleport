@@ -834,7 +834,418 @@ const U2FRegistrationSpecSchemaV1 = `{
   }
 }`
 
-// FIXME
+// U2FRegistrationCounter is a universal second factor registration counter for a specific user.
+type U2FRegistrationCounter interface {
+	// Resource sets common resource properties
+	Resource
+	// GetUser gets the username assocaited with this registration counter
+	GetUser() string
+	// GetCounterValue gets the value of the u2f registration counter
+	GetCounterValue() uint32
+	// Check checks the provided parameters
+	Check() error
+	// CheckAndSetDefaults checks and sets default values for any missing fields
+	CheckAndSetDefaults() error
+}
+
+// NewU2FRegistrationCounter creates a new U2FRegistrationCounter resource.
+//
+func NewU2FRegistrationCounter(user string, value uint32) U2FRegistrationCounter {
+	return &U2FRegistrationCounterV1{
+		Kind:    KindU2FRegistrationCounter,
+		Version: V1,
+		Metadata: Metadata{
+			Name:      user,
+			Namespace: defaults.Namespace,
+		},
+		Spec: U2FRegistrationCounterSpecV1{
+			Counter: value,
+		},
+	}
+}
+
+// GetUser gets the username assocaited with this registration counter
+func (r *U2FRegistrationCounterV1) GetUser() string {
+	return r.Metadata.Name
+}
+
+// GetCounterValue gets the value of the u2f registration counter
+func (r *U2FRegistrationCounterV1) GetCounterValue() uint32 {
+	return r.Spec.Counter
+}
+
+// Check checks if all passed parameters are valid
+func (r *U2FRegistrationCounterV1) Check() error {
+	if r.GetUser() == "" {
+		return trace.BadParameter("missing user name")
+	}
+	if r.Kind != KindU2FRegistrationCounter {
+		return trace.BadParameter("expected kind %q, got %q", KindU2FRegistrationCounter, r.Kind)
+	}
+	return nil
+}
+
+// CheckAndSetDefaults checks and sets default values for any missing fields.
+func (r *U2FRegistrationCounterV1) CheckAndSetDefaults() error {
+	if err := r.Metadata.CheckAndSetDefaults(); err != nil {
+		return trace.Wrap(err)
+	}
+	if err := r.Check(); err != nil {
+		return trace.Wrap(err)
+	}
+	return nil
+}
+
+// GetKind returns resource kind
+func (r *U2FRegistrationCounterV1) GetKind() string {
+	return r.Kind
+}
+
+// GetSubKind returns resource subkind
+func (r *U2FRegistrationCounterV1) GetSubKind() string {
+	return r.SubKind
+}
+
+// SetSubKind sets resource subkind
+func (r *U2FRegistrationCounterV1) SetSubKind(subkind string) {
+	r.SubKind = subkind
+}
+
+// GetVersion returns resource version
+func (r *U2FRegistrationCounterV1) GetVersion() string {
+	return r.Version
+}
+
+// GetName returns the name of the resource
+func (r *U2FRegistrationCounterV1) GetName() string {
+	return r.Metadata.GetName()
+}
+
+// SetName sets the name of the resource
+func (r *U2FRegistrationCounterV1) SetName(name string) {
+	r.Metadata.SetName(name)
+}
+
+// Expiry returns object expiry setting
+func (r *U2FRegistrationCounterV1) Expiry() time.Time {
+	return r.Metadata.Expiry()
+}
+
+// SetExpiry sets object expiry
+func (r *U2FRegistrationCounterV1) SetExpiry(expiry time.Time) {
+	r.Metadata.SetExpiry(expiry)
+}
+
+// SetTTL sets Expires header using current clock
+func (r *U2FRegistrationCounterV1) SetTTL(clock clockwork.Clock, ttl time.Duration) {
+	r.Metadata.SetTTL(clock, ttl)
+}
+
+// GetMetadata returns object metadata
+func (r *U2FRegistrationCounterV1) GetMetadata() Metadata {
+	return r.Metadata.GetMetadata()
+}
+
+// GetResourceID returns resource ID
+func (r *U2FRegistrationCounterV1) GetResourceID() int64 {
+	return r.Metadata.GetID()
+}
+
+// SetResourceID sets resource ID
+func (r *U2FRegistrationCounterV1) SetResourceID(id int64) {
+	r.Metadata.SetID(id)
+}
+
+// String returns human readable version of U2FRegistrationCounterV1
 func (r *U2FRegistrationCounterV1) String() string {
 	return fmt.Sprintf("U2FRegistrationCounter(user=%q,count=%v)", r.Metadata.Name, r.Spec.Counter)
 }
+
+// U2FRegistrationCounterMarshaler implements marshal/unmarshal of U2FRegistrationCounter implementations.
+type U2FRegistrationCounterMarshaler interface {
+	Marshal(U2FRegistrationCounter, ...MarshalOption) ([]byte, error)
+	Unmarshal([]byte, ...MarshalOption) (U2FRegistrationCounter, error)
+}
+
+func GetU2FRegistrationCounterMarshaler() U2FRegistrationCounterMarshaler {
+	return &u2fRegistrationCounterMarshaler{}
+}
+
+type u2fRegistrationCounterMarshaler struct{}
+
+func (_ *u2fRegistrationCounterMarshaler) Marshal(counter U2FRegistrationCounter, opts ...MarshalOption) ([]byte, error) {
+	cfg, err := collectOptions(opts)
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+	switch r := counter.(type) {
+	case *U2FRegistrationCounterV1:
+		if !cfg.PreserveResourceID {
+			// avoid modifying original object
+			cp := *r
+			cp.SetResourceID(0)
+			r = &cp
+		}
+		bytes, err := utils.FastMarshal(r)
+		if err != nil {
+			return nil, trace.Wrap(err)
+		}
+		return bytes, nil
+	default:
+		return nil, trace.NotImplemented("unknown u2f registration counter type %T", counter)
+	}
+}
+
+func (_ *u2fRegistrationCounterMarshaler) Unmarshal(bytes []byte, opts ...MarshalOption) (U2FRegistrationCounter, error) {
+	var counter U2FRegistrationCounterV1
+
+	if len(bytes) == 0 {
+		return nil, trace.BadParameter("missing resource data")
+	}
+
+	cfg, err := collectOptions(opts)
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+
+	if cfg.SkipValidation {
+		if err := utils.FastUnmarshal(bytes, &counter); err != nil {
+			return nil, trace.BadParameter(err.Error())
+		}
+	} else {
+		err := utils.UnmarshalWithSchema(GetU2FRegistrationCounterSchema(), &counter, bytes)
+		if err != nil {
+			return nil, trace.BadParameter(err.Error())
+		}
+	}
+	if cfg.ID != 0 {
+		counter.SetResourceID(cfg.ID)
+	}
+	if !cfg.Expires.IsZero() {
+		counter.SetExpiry(cfg.Expires)
+	}
+	return &counter, nil
+}
+
+// GetU2FRegistrationCounterSchema returns JSON schema for u2f registration counter resource.
+func GetU2FRegistrationCounterSchema() string {
+	return fmt.Sprintf(V2SchemaTemplate, MetadataSchema, U2FRegistrationCounterSpecSchemaV1, DefaultDefinitions)
+}
+
+// U2FRegistrationCounterSpecSchemaV1 is a JSON schema for u2f registration counter spec.
+const U2FRegistrationCounterSpecSchemaV1 = `{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["counter"],
+  "properties": {
+    "counter": {"type": "number"}
+  }
+}`
+
+// PasswordHash is a password hash resource for a specific user.
+type PasswordHash interface {
+	// Resource sets common resource properties
+	Resource
+	// GetUser gets the username assocaited with this password hash
+	GetUser() string
+	// GetPasswordHash gets the value of the password hash
+	GetPasswordHash() []byte
+	// Check checks the provided parameters
+	Check() error
+	// CheckAndSetDefaults checks and sets default values for any missing fields
+	CheckAndSetDefaults() error
+}
+
+// NewPasswordHash creates a new PasswordHash resource.
+//
+func NewPasswordHash(user string, hash []byte) PasswordHash {
+	return &PasswordHashV1{
+		Kind:    KindPasswordHash,
+		Version: V1,
+		Metadata: Metadata{
+			Name:      user,
+			Namespace: defaults.Namespace,
+		},
+		Spec: PasswordHashSpecV1{
+			Hash: hash,
+		},
+	}
+}
+
+// GetUser gets the username assocaited with this password hash
+func (r *PasswordHashV1) GetUser() string {
+	return r.Metadata.Name
+}
+
+// GetPasswordHash gets the value of the password hash
+func (r *PasswordHashV1) GetPasswordHash() []byte {
+	return r.Spec.Hash
+}
+
+// Check checks if all passed parameters are valid
+func (r *PasswordHashV1) Check() error {
+	if r.GetUser() == "" {
+		return trace.BadParameter("missing user name")
+	}
+	if r.Kind != KindPasswordHash {
+		return trace.BadParameter("expected kind %q, got %q", KindPasswordHash, r.Kind)
+	}
+	return nil
+}
+
+// CheckAndSetDefaults checks and sets default values for any missing fields.
+func (r *PasswordHashV1) CheckAndSetDefaults() error {
+	if err := r.Metadata.CheckAndSetDefaults(); err != nil {
+		return trace.Wrap(err)
+	}
+	if err := r.Check(); err != nil {
+		return trace.Wrap(err)
+	}
+	return nil
+}
+
+// GetKind returns resource kind
+func (r *PasswordHashV1) GetKind() string {
+	return r.Kind
+}
+
+// GetSubKind returns resource subkind
+func (r *PasswordHashV1) GetSubKind() string {
+	return r.SubKind
+}
+
+// SetSubKind sets resource subkind
+func (r *PasswordHashV1) SetSubKind(subkind string) {
+	r.SubKind = subkind
+}
+
+// GetVersion returns resource version
+func (r *PasswordHashV1) GetVersion() string {
+	return r.Version
+}
+
+// GetName returns the name of the resource
+func (r *PasswordHashV1) GetName() string {
+	return r.Metadata.GetName()
+}
+
+// SetName sets the name of the resource
+func (r *PasswordHashV1) SetName(name string) {
+	r.Metadata.SetName(name)
+}
+
+// Expiry returns object expiry setting
+func (r *PasswordHashV1) Expiry() time.Time {
+	return r.Metadata.Expiry()
+}
+
+// SetExpiry sets object expiry
+func (r *PasswordHashV1) SetExpiry(expiry time.Time) {
+	r.Metadata.SetExpiry(expiry)
+}
+
+// SetTTL sets Expires header using current clock
+func (r *PasswordHashV1) SetTTL(clock clockwork.Clock, ttl time.Duration) {
+	r.Metadata.SetTTL(clock, ttl)
+}
+
+// GetMetadata returns object metadata
+func (r *PasswordHashV1) GetMetadata() Metadata {
+	return r.Metadata.GetMetadata()
+}
+
+// GetResourceID returns resource ID
+func (r *PasswordHashV1) GetResourceID() int64 {
+	return r.Metadata.GetID()
+}
+
+// SetResourceID sets resource ID
+func (r *PasswordHashV1) SetResourceID(id int64) {
+	r.Metadata.SetID(id)
+}
+
+// String returns human readable version of PasswordHashV1
+func (r *PasswordHashV1) String() string {
+	return fmt.Sprintf("PasswordHash(user=%q)", r.Metadata.Name)
+}
+
+// PasswordHashMarshaler implements marshal/unmarshal of PasswordHash implementations.
+type PasswordHashMarshaler interface {
+	Marshal(PasswordHash, ...MarshalOption) ([]byte, error)
+	Unmarshal([]byte, ...MarshalOption) (PasswordHash, error)
+}
+
+func GetPasswordHashMarshaler() PasswordHashMarshaler {
+	return &passwordHashMarshaler{}
+}
+
+type passwordHashMarshaler struct{}
+
+func (_ *passwordHashMarshaler) Marshal(hash PasswordHash, opts ...MarshalOption) ([]byte, error) {
+	cfg, err := collectOptions(opts)
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+	switch r := hash.(type) {
+	case *PasswordHashV1:
+		if !cfg.PreserveResourceID {
+			// avoid modifying original object
+			cp := *r
+			cp.SetResourceID(0)
+			r = &cp
+		}
+		bytes, err := utils.FastMarshal(r)
+		if err != nil {
+			return nil, trace.Wrap(err)
+		}
+		return bytes, nil
+	default:
+		return nil, trace.NotImplemented("unknown password hash type %T", hash)
+	}
+}
+
+func (_ *passwordHashMarshaler) Unmarshal(bytes []byte, opts ...MarshalOption) (PasswordHash, error) {
+	var hash PasswordHashV1
+
+	if len(bytes) == 0 {
+		return nil, trace.BadParameter("missing resource data")
+	}
+
+	cfg, err := collectOptions(opts)
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+
+	if cfg.SkipValidation {
+		if err := utils.FastUnmarshal(bytes, &hash); err != nil {
+			return nil, trace.BadParameter(err.Error())
+		}
+	} else {
+		err := utils.UnmarshalWithSchema(GetPasswordHashSchema(), &hash, bytes)
+		if err != nil {
+			return nil, trace.BadParameter(err.Error())
+		}
+	}
+	if cfg.ID != 0 {
+		hash.SetResourceID(cfg.ID)
+	}
+	if !cfg.Expires.IsZero() {
+		hash.SetExpiry(cfg.Expires)
+	}
+	return &hash, nil
+}
+
+// GetPasswordHashSchema returns JSON schema for password hash resource.
+func GetPasswordHashSchema() string {
+	return fmt.Sprintf(V2SchemaTemplate, MetadataSchema, PasswordHashSpecSchemaV1, DefaultDefinitions)
+}
+
+// PasswordHashSpecSchemaV1 is a JSON schema for password hash spec.
+const PasswordHashSpecSchemaV1 = `{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["hash"],
+  "properties": {
+    "hash": {"type": "string"}
+  }
+}`

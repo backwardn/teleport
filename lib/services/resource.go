@@ -128,6 +128,12 @@ const (
 	// KindU2FRegistration is a universal second factor registration.
 	KindU2FRegistration = "u2f_registration"
 
+	// KindU2FRegistrationCounter is a universal second factor registration.
+	KindU2FRegistrationCounter = "u2f_registration_counter"
+
+	// KindPasswordHash is a hashed user password.
+	KindPasswordHash = "password_hash"
+
 	// KindClusterAuthPreference is the type of authentication for this cluster.
 	KindClusterAuthPreference = "cluster_auth_preference"
 
@@ -471,6 +477,44 @@ func init() {
 	})
 	RegisterResourceUnmarshaler(KindU2FRegistration, func(b []byte, opts ...MarshalOption) (Resource, error) {
 		rsc, err := GetU2FRegistrationMarshaler().Unmarshal(b, opts...)
+		if err != nil {
+			return nil, trace.Wrap(err)
+		}
+		return rsc, nil
+	})
+
+	RegisterResourceMarshaler(KindU2FRegistrationCounter, func(r Resource, opts ...MarshalOption) ([]byte, error) {
+		rsc, ok := r.(U2FRegistrationCounter)
+		if !ok {
+			return nil, trace.BadParameter("expected U2FRegistrationCounter, got %T", r)
+		}
+		raw, err := GetU2FRegistrationCounterMarshaler().Marshal(rsc, opts...)
+		if err != nil {
+			return nil, trace.Wrap(err)
+		}
+		return raw, nil
+	})
+	RegisterResourceUnmarshaler(KindU2FRegistrationCounter, func(b []byte, opts ...MarshalOption) (Resource, error) {
+		rsc, err := GetU2FRegistrationCounterMarshaler().Unmarshal(b, opts...)
+		if err != nil {
+			return nil, trace.Wrap(err)
+		}
+		return rsc, nil
+	})
+
+	RegisterResourceMarshaler(KindPasswordHash, func(r Resource, opts ...MarshalOption) ([]byte, error) {
+		rsc, ok := r.(PasswordHash)
+		if !ok {
+			return nil, trace.BadParameter("expected PasswordHash, got %T", r)
+		}
+		raw, err := GetPasswordHashMarshaler().Marshal(rsc, opts...)
+		if err != nil {
+			return nil, trace.Wrap(err)
+		}
+		return raw, nil
+	})
+	RegisterResourceUnmarshaler(KindPasswordHash, func(b []byte, opts ...MarshalOption) (Resource, error) {
+		rsc, err := GetPasswordHashMarshaler().Unmarshal(b, opts...)
 		if err != nil {
 			return nil, trace.Wrap(err)
 		}

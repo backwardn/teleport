@@ -85,6 +85,10 @@ func ItemizeResource(resource services.Resource) (*backend.Item, error) {
 		item, err = itemizeOTPVerifier(r)
 	case services.U2FRegistration:
 		item, err = itemizeU2FRegistration(r)
+	case services.U2FRegistrationCounter:
+		item, err = itemizeU2FRegistrationCounter(r)
+	case services.PasswordHash:
+		item, err = itemizePasswordHash(r)
 	default:
 		return nil, trace.NotImplemented("cannot itemize resource of type %T", resource)
 	}
@@ -460,6 +464,78 @@ func deitemizeU2FRegistration(item backend.Item) (services.U2FRegistration, erro
 		return nil, trace.Wrap(err)
 	}
 	return reg, nil
+}
+
+// itemizeU2FRegistrationCounter attempts to encode the supplied registration counter as an
+// instance of `backend.Item` suitable for storage.
+func itemizeU2FRegistrationCounter(ctr services.U2FRegistrationCounter) (*backend.Item, error) {
+	if err := ctr.CheckAndSetDefaults(); err != nil {
+		return nil, trace.Wrap(err)
+	}
+	value, err := json.Marshal(u2fRegistrationCounter{
+		Counter: ctr.GetCounterValue(),
+	})
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+	item := &backend.Item{
+		Key:     backend.Key(webPrefix, usersPrefix, ctr.GetUser(), u2fRegistrationCounterPrefix),
+		Value:   value,
+		Expires: ctr.Expiry(),
+		ID:      ctr.GetResourceID(),
+	}
+	return item, nil
+}
+
+// deitemizeU2FRegistrationCounter attempts to decode the supplied `backend.Item` as
+// a registration counter resource.
+func deitemizeU2FRegistrationCounter(item backend.Item) (services.U2FRegistrationCounter, error) {
+	name, _, err := splitUsernameAndSuffix(string(item.Key))
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+	var raw u2fRegistrationCounter
+	if err := json.Unmarshal(item.Value, &raw); err != nil {
+		return nil, trace.Wrap(err)
+	}
+	ctr := services.NewU2FRegistrationCounter(name, raw.Counter)
+	ctr.SetExpiry(item.Expires)
+	ctr.SetResourceID(item.ID)
+	if err := ctr.CheckAndSetDefaults(); err != nil {
+		return nil, trace.Wrap(err)
+	}
+	return ctr, nil
+}
+
+// itemizePasswordHash attempts to encode the supplied password hash as an
+// instance of `backend.Item` suitable for storage.
+func itemizePasswordHash(hash services.PasswordHash) (*backend.Item, error) {
+	if err := hash.CheckAndSetDefaults(); err != nil {
+		return nil, trace.Wrap(err)
+	}
+	item := &backend.Item{
+		Key:     backend.Key(webPrefix, usersPrefix, hash.GetUser(), pwdPrefix),
+		Value:   hash.GetPasswordHash(),
+		Expires: hash.Expiry(),
+		ID:      hash.GetResourceID(),
+	}
+	return item, nil
+}
+
+// deitemizePasswordHash attempts to decode the supplied `backend.Item` as
+// a password hash resource.
+func deitemizePasswordHash(item backend.Item) (services.PasswordHash, error) {
+	name, _, err := splitUsernameAndSuffix(string(item.Key))
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+	hash := services.NewPasswordHash(name, item.Value)
+	hash.SetExpiry(item.Expires)
+	hash.SetResourceID(item.ID)
+	if err := hash.CheckAndSetDefaults(); err != nil {
+		return nil, trace.Wrap(err)
+	}
+	return hash, nil
 }
 
 // fullUsersPrefix is the entire string preceeding the name of a user in a key

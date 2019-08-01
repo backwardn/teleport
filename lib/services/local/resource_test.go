@@ -183,6 +183,13 @@ func (r *ResourceSuite) TestU2FRegistrationResource(c *check.C) {
 	r.runCreationChecks(c, reg)
 }
 
+func (r *ResourceSuite) TestU2FRegistrationCounterResource(c *check.C) {
+	ctr := services.NewU2FRegistrationCounter("alice", 7)
+	err := ctr.Check()
+	c.Assert(err, check.IsNil)
+	r.runCreationChecks(c, ctr)
+}
+
 func u2fTestCase(c *check.C) u2f.Registration {
 	derKey, err := base64.StdEncoding.DecodeString("MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEGOi54Eun0r3Xrj8PjyOGYzJObENYI/t/Lr9g9PsHTHnp1qI2ysIhsdMPd7x/vpsL6cr+2EPVik7921OSsVjEMw==")
 	c.Assert(err, check.IsNil)
