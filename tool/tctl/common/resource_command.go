@@ -373,14 +373,14 @@ func (rc *ResourceCommand) getCollection(client auth.ClientI) (c ResourceCollect
 		var users services.Users
 		// just one?
 		if !rc.ref.IsEmpty() {
-			user, err := client.GetUser(rc.ref.Name)
+			user, err := client.GetUser(rc.ref.Name, rc.withSecrets)
 			if err != nil {
 				return nil, trace.Wrap(err)
 			}
 			users = services.Users{user}
 			// all of them?
 		} else {
-			users, err = client.GetUsers()
+			users, err = client.GetUsers(rc.withSecrets)
 			if err != nil {
 				return nil, trace.Wrap(err)
 			}

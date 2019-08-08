@@ -765,23 +765,30 @@ func (a *AuthWithRoles) DeleteWebSession(user string, sid string) error {
 	return a.authServer.DeleteWebSession(user, sid)
 }
 
-func (a *AuthWithRoles) GetUsers() ([]services.User, error) {
+func (a *AuthWithRoles) GetUsers(withSecrets bool) ([]services.User, error) {
 	if err := a.action(defaults.Namespace, services.KindUser, services.VerbList); err != nil {
 		return nil, trace.Wrap(err)
 	}
+	// XXX: Prior to adding `withSecrets` flag,  `GetUsers` was already scoped to `VerbRead`
+	// rather than `VerbReadNoSecrets`.  Other methods supporting the `withSecrets` flag follow
+	// the pattern of scoping to `VerbReadNoSecrets` by default, and applying `VerbRead` only
+	// if `withSecrets` is `true`.  Whether or not this pattern should be adopted here has not
+	// yet been evaluated.  The addition of the `withSecrets` flag did not add new restrictions
+	// to the default behavior of the method, so doing so would be a relaxation of restriction.
 	if err := a.action(defaults.Namespace, services.KindUser, services.VerbRead); err != nil {
 		return nil, trace.Wrap(err)
 	}
-	return a.authServer.GetUsers()
+	return a.authServer.GetUsers(withSecrets)
 }
 
-func (a *AuthWithRoles) GetUser(name string) (services.User, error) {
+func (a *AuthWithRoles) GetUser(name string, withSecrets bool) (services.User, error) {
 	if err := a.currentUserAction(name); err != nil {
+		// XXX: See above note in `GetUsers`.
 		if err := a.action(defaults.Namespace, services.KindUser, services.VerbRead); err != nil {
 			return nil, trace.Wrap(err)
 		}
 	}
-	return a.authServer.Identity.GetUser(name)
+	return a.authServer.Identity.GetUser(name, withSecrets)
 }
 
 func (a *AuthWithRoles) DeleteUser(user string) error {
@@ -842,7 +849,7 @@ func (a *AuthWithRoles) GenerateUserCerts(ctx context.Context, req proto.UserCer
 	}
 
 	// Extract the user and role set for whom the certificate will be generated.
-	user, err := a.GetUser(req.Username)
+	user, err := a.GetUser(req.Username, false)
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}

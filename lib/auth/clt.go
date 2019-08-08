@@ -1420,7 +1420,8 @@ func (c *Client) DeleteWebSession(user string, sid string) error {
 }
 
 // GetUser returns a list of usernames registered in the system
-func (c *Client) GetUser(name string) (services.User, error) {
+func (c *Client) GetUser(name string, withSecrets bool) (services.User, error) {
+	// FIXME: withSecrets not propagated.
 	if name == "" {
 		return nil, trace.BadParameter("missing username")
 	}
@@ -1436,7 +1437,8 @@ func (c *Client) GetUser(name string) (services.User, error) {
 }
 
 // GetUsers returns a list of usernames registered in the system
-func (c *Client) GetUsers() ([]services.User, error) {
+func (c *Client) GetUsers(withSecrets bool) ([]services.User, error) {
+	// FIXME: withSecrets not propagated.
 	out, err := c.Get(c.Endpoint("users"), url.Values{})
 	if err != nil {
 		return nil, trace.Wrap(err)
@@ -2551,7 +2553,7 @@ type IdentityService interface {
 	CreateUserWithU2FToken(token string, password string, u2fRegisterResponse u2f.RegisterResponse) (services.WebSession, error)
 
 	// GetUser returns user by name
-	GetUser(name string) (services.User, error)
+	GetUser(name string, withSecrets bool) (services.User, error)
 
 	// UpsertUser user updates or inserts user entry
 	UpsertUser(user services.User) error
@@ -2560,7 +2562,7 @@ type IdentityService interface {
 	DeleteUser(user string) error
 
 	// GetUsers returns a list of usernames registered in the system
-	GetUsers() ([]services.User, error)
+	GetUsers(withSecrets bool) ([]services.User, error)
 
 	// ChangePassword changes user password
 	ChangePassword(req services.ChangePasswordReq) error

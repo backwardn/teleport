@@ -634,17 +634,17 @@ func (c *Cache) GetProxies() ([]services.Server, error) {
 }
 
 // GetUser is a part of auth.AccessPoint implementation.
-func (c *Cache) GetUser(name string) (user services.User, err error) {
-	u, err := c.usersCache.GetUser(name)
+func (c *Cache) GetUser(name string, withSecrets bool) (user services.User, err error) {
+	u, err := c.usersCache.GetUser(name, withSecrets)
 	if trace.IsNotFound(err) {
-		return c.Users.GetUser(name)
+		return c.Users.GetUser(name, withSecrets)
 	}
 	return u, err
 }
 
 // GetUsers is a part of auth.AccessPoint implementation
-func (c *Cache) GetUsers() (users []services.User, err error) {
-	return c.usersCache.GetUsers()
+func (c *Cache) GetUsers(withSecrets bool) (users []services.User, err error) {
+	return c.usersCache.GetUsers(withSecrets)
 }
 
 // GetTunnelConnections is a part of auth.AccessPoint implementation

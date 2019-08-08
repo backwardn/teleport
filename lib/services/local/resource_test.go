@@ -104,7 +104,7 @@ func (r *ResourceSuite) TestUserResource(c *check.C) {
 	r.runCreationChecks(c, alice, bob)
 	// Check that dynamically created item is compatible with service
 	s := NewIdentityService(r.bk)
-	b, err := s.GetUser("bob")
+	b, err := s.GetUser("bob", false)
 	c.Assert(err, check.IsNil)
 	c.Assert(bob.Equals(b), check.Equals, true, check.Commentf("dynamically inserted user does not match"))
 }

@@ -34,13 +34,12 @@ import (
 // NOTE: This function is non-atomic and performs no internal synchronization;
 // backend must be locked by caller when operating in parallel environment.
 func CreateResources(ctx context.Context, b backend.Backend, resources ...services.Resource) error {
-	var items []*backend.Item
-	// itemize all resources & ensure that they do not exist.
-	for _, r := range resources {
-		item, err := ItemizeResource(r)
-		if err != nil {
-			return trace.Wrap(err)
-		}
+	items, err := ItemizeResources(resources...)
+	if err != nil {
+		return trace.Wrap(err)
+	}
+	// ensure all items do not exist before continuing.
+	for _, item := range items {
 		_, err = b.Get(ctx, item.Key)
 		if !trace.IsNotFound(err) {
 			if err != nil {
@@ -48,11 +47,10 @@ func CreateResources(ctx context.Context, b backend.Backend, resources ...servic
 			}
 			return trace.AlreadyExists("resource %q already exists", string(item.Key))
 		}
-		items = append(items, item)
 	}
 	// create all items.
 	for _, item := range items {
-		_, err := b.Create(context.TODO(), *item)
+		_, err := b.Create(ctx, item)
 		if err != nil {
 			return trace.Wrap(err)
 		}
@@ -60,15 +58,31 @@ func CreateResources(ctx context.Context, b backend.Backend, resources ...servic
 	return nil
 }
 
-// ItemizeResource attempts to construct an instance of `backend.Item` from
+func ItemizeResources(resources ...services.Resource) ([]backend.Item, error) {
+	var allItems []backend.Item
+	for _, rsc := range resources {
+		items, err := ItemizeResource(rsc)
+		if err != nil {
+			return nil, trace.Wrap(err)
+		}
+		allItems = append(allItems, items...)
+	}
+	return allItems, nil
+}
+
+// ItemizeResource attempts to construct one or more instances of `backend.Item` from
 // a given resource.  If `rsc` is not one of the supported resource types,
 // a `trace.NotImplementedError` is returned.
-func ItemizeResource(resource services.Resource) (*backend.Item, error) {
+func ItemizeResource(resource services.Resource) ([]backend.Item, error) {
 	var item *backend.Item
+	var extItems []backend.Item
 	var err error
 	switch r := resource.(type) {
 	case services.User:
 		item, err = itemizeUser(r)
+		if auth := r.GetLocalAuth(); err == nil && auth != nil {
+			extItems, err = itemizeLocalAuthSecrets(r.GetName(), *auth)
+		}
 	case services.CertAuthority:
 		item, err = itemizeCertAuthority(r)
 	case services.TrustedCluster:
@@ -95,7 +109,36 @@ func ItemizeResource(resource services.Resource) (*backend.Item, error) {
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
-	return item, nil
+	items := make([]backend.Item, 0, len(extItems)+1)
+	items = append(items, *item)
+	items = append(items, extItems...)
+	return items, nil
+}
+
+// DeitemizeResources converts one or more items into one or more resources.
+// NOTE: This is not necessarily a 1-to-1 conversion, and order is not preserved.
+func DeitemizeResources(items ...backend.Item) ([]services.Resource, error) {
+	var resources []services.Resource
+	// User resources may be split across multiple items, so we must extract them first.
+	users, rem, err := collectUserItems(items)
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+	for uname, uitems := range users {
+		user, err := deitemizeUserItems(uname, uitems)
+		if err != nil {
+			return nil, trace.Wrap(err)
+		}
+		resources = append(resources, user)
+	}
+	for _, item := range rem {
+		rsc, err := DeitemizeResource(item)
+		if err != nil {
+			return nil, trace.Wrap(err)
+		}
+		resources = append(resources, rsc)
+	}
+	return resources, nil
 }
 
 // DeitemizeResource attempts to decode the supplied `backend.Item` as one
@@ -390,6 +433,110 @@ func deitemizeSAMLConnector(item backend.Item) (services.SAMLConnector, error) {
 	return connector, nil
 }
 
+// deitemizeUserItems is an extended variant of deitemizeUser which can be used
+// with the `userItems` collector to include additional backend.Item values
+// such as password hash or u2f registration.
+func deitemizeUserItems(name string, items userItems) (services.User, error) {
+	if items.params == nil {
+		return nil, trace.BadParameter("cannot deitemize user %q without primary item %q", name, paramsPrefix)
+	}
+	user, err := deitemizeUser(*items.params)
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+	if items.Len() < 2 {
+		return user, nil
+	}
+	auth, err := deitemizeLocalAuthSecrets(items)
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+	user.SetLocalAuth(auth)
+	return user, nil
+}
+
+func deitemizeLocalAuthSecrets(items userItems) (*services.LocalAuthSecrets, error) {
+	var auth services.LocalAuthSecrets
+	if items.pwd != nil {
+		auth.PasswordHash = items.pwd.Value
+	}
+	if items.totp != nil {
+		auth.TOTPKey = string(items.totp.Value)
+	}
+	if items.u2fRegistration != nil {
+		var raw u2fRegistration
+		if err := json.Unmarshal(items.u2fRegistration.Value, &raw); err != nil {
+			return nil, trace.Wrap(err)
+		}
+		auth.U2FRegistration = &services.U2FRegistrationData{
+			Raw:       raw.Raw,
+			KeyHandle: raw.KeyHandle,
+			PubKey:    raw.MarshalledPubKey,
+		}
+	}
+	if items.u2fCounter != nil {
+		var raw u2fRegistrationCounter
+		if err := json.Unmarshal(items.u2fCounter.Value, &raw); err != nil {
+			return nil, trace.Wrap(err)
+		}
+		auth.U2FCounter = raw.Counter
+	}
+	if err := auth.Check(); err != nil {
+		return nil, trace.Wrap(err)
+	}
+	return &auth, nil
+}
+
+func itemizeLocalAuthSecrets(user string, auth services.LocalAuthSecrets) ([]backend.Item, error) {
+	var items []backend.Item
+	if err := auth.Check(); err != nil {
+		return nil, trace.Wrap(err)
+	}
+	if len(auth.PasswordHash) > 0 {
+		item := backend.Item{
+			Key:   backend.Key(webPrefix, usersPrefix, user, pwdPrefix),
+			Value: auth.PasswordHash,
+		}
+		items = append(items, item)
+	}
+	if len(auth.TOTPKey) > 0 {
+		item := backend.Item{
+			Key:   backend.Key(webPrefix, usersPrefix, user, totpPrefix),
+			Value: []byte(auth.TOTPKey),
+		}
+		items = append(items, item)
+	}
+	if auth.U2FRegistration != nil {
+		value, err := json.Marshal(u2fRegistration{
+			Raw:              auth.U2FRegistration.Raw,
+			KeyHandle:        auth.U2FRegistration.KeyHandle,
+			MarshalledPubKey: auth.U2FRegistration.PubKey,
+		})
+		if err != nil {
+			return nil, trace.Wrap(err)
+		}
+		item := backend.Item{
+			Key:   backend.Key(webPrefix, usersPrefix, user, u2fRegistrationPrefix),
+			Value: value,
+		}
+		items = append(items, item)
+	}
+	if auth.U2FCounter > 0 {
+		value, err := json.Marshal(u2fRegistrationCounter{
+			Counter: auth.U2FCounter,
+		})
+		if err != nil {
+			return nil, trace.Wrap(err)
+		}
+		item := backend.Item{
+			Key:   backend.Key(webPrefix, usersPrefix, user, u2fRegistrationCounterPrefix),
+			Value: value,
+		}
+		items = append(items, item)
+	}
+	return items, nil
+}
+
 // itemizeOTPVerifier attempts to encode the supplied verifier as an
 // instance of `backend.Item` suitable for storage.
 func itemizeOTPVerifier(verifier services.OTPVerifier) (*backend.Item, error) {
@@ -538,12 +685,15 @@ func deitemizePasswordHash(item backend.Item) (services.PasswordHash, error) {
 	return hash, nil
 }
 
+// TODO: convert username/suffix ops to work on bytes by default; string/byte conversion
+// has order N cost.
+
 // fullUsersPrefix is the entire string preceeding the name of a user in a key
 var fullUsersPrefix string = string(backend.Key(webPrefix, usersPrefix)) + "/"
 
 // splitUsernameAndSuffix is a helper for extracting usernames and suffixes from
 // backend key values.
-func splitUsernameAndSuffix(key string) (string, string, error) {
+func splitUsernameAndSuffix(key string) (name string, suffix string, err error) {
 	if !strings.HasPrefix(key, fullUsersPrefix) {
 		return "", "", trace.BadParameter("expected format '%s/<name>/<suffix>', got '%s'", fullUsersPrefix, key)
 	}
@@ -553,4 +703,90 @@ func splitUsernameAndSuffix(key string) (string, string, error) {
 		return "", "", trace.BadParameter("expected format <name>/<suffix>, got %q", key)
 	}
 	return key[:idx], key[idx+1:], nil
+}
+
+// trimToSuffix trims a key-like value upto and including the last `/` character.
+// If no `/` exists, the full value is returned.  If `/` is the last character, an
+// empty string is returned.
+func trimToSuffix(keyLike string) (suffix string) {
+	idx := strings.LastIndex(keyLike, "/")
+	if idx < 0 {
+		return keyLike
+	}
+	return keyLike[idx+1:]
+}
+
+// collectUserItems handles the case where multiple items pertain to the same user resource.
+// User associated items are sorted by username and suffix.  Items which do not both start with
+// the expected prefix *and* end with one of the expected suffixes are passed back in `rem`.
+func collectUserItems(items []backend.Item) (users map[string]userItems, rem []backend.Item, err error) {
+	users = make(map[string]userItems)
+	for _, item := range items {
+		key := string(item.Key)
+		if !strings.HasPrefix(key, fullUsersPrefix) {
+			rem = append(rem, item)
+			continue
+		}
+		name, suffix, err := splitUsernameAndSuffix(key)
+		if err != nil {
+			return nil, nil, err
+		}
+		collector := users[name]
+		if !collector.Set(suffix, &item) {
+			// suffix not recognized, output this item with the rest of the
+			// unhandled items.
+			rem = append(rem, item)
+			continue
+		}
+		users[name] = collector
+	}
+	return users, rem, nil
+}
+
+// userItems is a collector for item types related to a single user resource.
+type userItems struct {
+	params          *backend.Item
+	pwd             *backend.Item
+	totp            *backend.Item
+	u2fRegistration *backend.Item
+	u2fCounter      *backend.Item
+}
+
+// Set attempts to set a field by suffix (use nil to clear a field).
+func (u *userItems) Set(suffix string, item *backend.Item) (ok bool) {
+	switch suffix {
+	case paramsPrefix:
+		u.params = item
+	case pwdPrefix:
+		u.pwd = item
+	case totpPrefix:
+		u.totp = item
+	case u2fRegistrationPrefix:
+		u.u2fRegistration = item
+	case u2fRegistrationCounterPrefix:
+		u.u2fCounter = item
+	default:
+		return false
+	}
+	return true
+}
+
+func (u *userItems) slots() [5]*backend.Item {
+	return [5]*backend.Item{
+		u.params,
+		u.pwd,
+		u.totp,
+		u.u2fRegistration,
+		u.u2fCounter,
+	}
+}
+
+func (u *userItems) Len() int {
+	var l int
+	for _, s := range u.slots() {
+		if s != nil {
+			l++
+		}
+	}
+	return l
 }
