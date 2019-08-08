@@ -76,6 +76,9 @@ func (s *IdentityService) GetUsers(withSecrets bool) ([]services.User, error) {
 		if err != nil {
 			return nil, trace.Wrap(err)
 		}
+		if !withSecrets {
+			u.SetLocalAuth(nil)
+		}
 		out = append(out, u)
 	}
 	return out, nil
@@ -174,6 +177,9 @@ func (s *IdentityService) GetUser(user string, withSecrets bool) (services.User,
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
+	if !withSecrets {
+		u.SetLocalAuth(nil)
+	}
 	return u, nil
 }
 
@@ -189,7 +195,7 @@ func (s *IdentityService) getUserWithSecrets(user string) (services.User, error)
 	var uitems userItems
 	for _, item := range result.Items {
 		suffix := trimToSuffix(string(item.Key))
-		uitems.Set(suffix, &item) // Result of Set i
+		uitems.Set(suffix, item) // Result of Set i
 	}
 	u, err := deitemizeUserItems(user, uitems)
 	if err != nil {
@@ -212,7 +218,7 @@ func (s *IdentityService) upsertLocalAuthSecrets(user string, auth services.Loca
 		}
 	}
 	if auth.U2FRegistration != nil {
-		reg, err := auth.U2FRegistration.GetRegistrationDecoded()
+		reg, err := auth.GetU2FRegistration()
 		if err != nil {
 			return trace.Wrap(err)
 		}

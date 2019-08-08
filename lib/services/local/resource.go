@@ -95,14 +95,6 @@ func ItemizeResource(resource services.Resource) ([]backend.Item, error) {
 		item, err = itemizeOIDCConnector(r)
 	case services.SAMLConnector:
 		item, err = itemizeSAMLConnector(r)
-	case services.OTPVerifier:
-		item, err = itemizeOTPVerifier(r)
-	case services.U2FRegistration:
-		item, err = itemizeU2FRegistration(r)
-	case services.U2FRegistrationCounter:
-		item, err = itemizeU2FRegistrationCounter(r)
-	case services.PasswordHash:
-		item, err = itemizePasswordHash(r)
 	default:
 		return nil, trace.NotImplemented("cannot itemize resource of type %T", resource)
 	}
@@ -146,32 +138,8 @@ func DeitemizeResources(items ...backend.Item) ([]services.Resource, error) {
 // one of the supported resource types, `trace.NotImplementedError` is returned.
 func DeitemizeResource(item backend.Item) (services.Resource, error) {
 	var u services.UnknownResource
-	if err := u.UnmarshalJSON(item.Value); err != nil || u.GetKind() == "" {
-		// Special Case: certain values are not currently stored in their resource
-		// form, and therefore must be identified by their suffix instead. If we
-		// failed to unmarshal the item as JSON, or if the 'kind' field was missing,
-		// then we might be be dealing with one of the non-conformant types.
-		key := string(item.Key)
-		switch {
-		case strings.HasSuffix(key, "otp"): // match all `*otp` types
-			verifier, err := deitemizeOTPVerifier(item)
-			if err != nil {
-				return nil, trace.Wrap(err)
-			}
-			return verifier, nil
-		case strings.HasSuffix(key, u2fRegistrationPrefix):
-			reg, err := deitemizeU2FRegistration(item)
-			if err != nil {
-				return nil, trace.Wrap(err)
-			}
-			return reg, nil
-		default:
-			// we got here for one of two reasons; invalid json or missing `kind` field.
-			if err != nil {
-				return nil, trace.Wrap(err)
-			}
-			return nil, trace.BadParameter("resource missing expected field 'kind'")
-		}
+	if err := u.UnmarshalJSON(item.Value); err != nil {
+		return nil, trace.Wrap(err)
 	}
 	var rsc services.Resource
 	var err error
@@ -190,6 +158,8 @@ func DeitemizeResource(item backend.Item) (services.Resource, error) {
 		rsc, err = deitemizeOIDCConnector(item)
 	case services.KindSAMLConnector:
 		rsc, err = deitemizeSAMLConnector(item)
+	case "":
+		return nil, trace.BadParameter("item %q is not a resource (missing field 'kind')", string(item.Key))
 	default:
 		return nil, trace.NotImplemented("cannot dynamically decode resource of kind %q", kind)
 	}
@@ -537,154 +507,6 @@ func itemizeLocalAuthSecrets(user string, auth services.LocalAuthSecrets) ([]bac
 	return items, nil
 }
 
-// itemizeOTPVerifier attempts to encode the supplied verifier as an
-// instance of `backend.Item` suitable for storage.
-func itemizeOTPVerifier(verifier services.OTPVerifier) (*backend.Item, error) {
-	if err := verifier.CheckAndSetDefaults(); err != nil {
-		return nil, trace.Wrap(err)
-	}
-	value := []byte(verifier.GetOTPKey())
-	item := &backend.Item{
-		Key:     backend.Key(webPrefix, usersPrefix, verifier.GetUser(), verifier.GetSubKind()),
-		Value:   value,
-		Expires: verifier.Expiry(),
-		ID:      verifier.GetResourceID(),
-	}
-	return item, nil
-}
-
-// deitemizeOTPVerifier attempts to decode the supplied `backend.Item` as
-// an otp verifier resource.
-func deitemizeOTPVerifier(item backend.Item) (services.OTPVerifier, error) {
-	name, subkind, err := splitUsernameAndSuffix(string(item.Key))
-	if err != nil {
-		return nil, trace.Wrap(err)
-	}
-	verifier := services.NewOTPVerifier(name, string(item.Value))
-	verifier.SetSubKind(subkind)
-	verifier.SetExpiry(item.Expires)
-	verifier.SetResourceID(item.ID)
-	if err := verifier.CheckAndSetDefaults(); err != nil {
-		return nil, trace.Wrap(err)
-	}
-	return verifier, nil
-}
-
-// itemizeU2FRegistration attempts to encode the supplied registration as an
-// instance of `backend.Item` suitable for storage.
-func itemizeU2FRegistration(reg services.U2FRegistration) (*backend.Item, error) {
-	if err := reg.CheckAndSetDefaults(); err != nil {
-		return nil, trace.Wrap(err)
-	}
-	value, err := json.Marshal(u2fRegistration{
-		Raw:              reg.GetRawRegistration(),
-		KeyHandle:        reg.GetKeyHandle(),
-		MarshalledPubKey: reg.GetPubKeyDER(),
-	})
-	if err != nil {
-		return nil, trace.Wrap(err)
-	}
-	item := &backend.Item{
-		Key:     backend.Key(webPrefix, usersPrefix, reg.GetUser(), u2fRegistrationPrefix),
-		Value:   value,
-		Expires: reg.Expiry(),
-		ID:      reg.GetResourceID(),
-	}
-	return item, nil
-}
-
-// deitemizeU2FRegistration attempts to decode the supplied `backend.Item` as
-// a u2f registration resource.
-func deitemizeU2FRegistration(item backend.Item) (services.U2FRegistration, error) {
-	name, _, err := splitUsernameAndSuffix(string(item.Key))
-	if err != nil {
-		return nil, trace.Wrap(err)
-	}
-	var raw u2fRegistration
-	if err := json.Unmarshal(item.Value, &raw); err != nil {
-		return nil, trace.Wrap(err)
-	}
-	reg := services.NewU2FRegistration(name, raw.Raw, raw.KeyHandle, raw.MarshalledPubKey)
-	reg.SetExpiry(item.Expires)
-	reg.SetResourceID(item.ID)
-	if err := reg.CheckAndSetDefaults(); err != nil {
-		return nil, trace.Wrap(err)
-	}
-	return reg, nil
-}
-
-// itemizeU2FRegistrationCounter attempts to encode the supplied registration counter as an
-// instance of `backend.Item` suitable for storage.
-func itemizeU2FRegistrationCounter(ctr services.U2FRegistrationCounter) (*backend.Item, error) {
-	if err := ctr.CheckAndSetDefaults(); err != nil {
-		return nil, trace.Wrap(err)
-	}
-	value, err := json.Marshal(u2fRegistrationCounter{
-		Counter: ctr.GetCounterValue(),
-	})
-	if err != nil {
-		return nil, trace.Wrap(err)
-	}
-	item := &backend.Item{
-		Key:     backend.Key(webPrefix, usersPrefix, ctr.GetUser(), u2fRegistrationCounterPrefix),
-		Value:   value,
-		Expires: ctr.Expiry(),
-		ID:      ctr.GetResourceID(),
-	}
-	return item, nil
-}
-
-// deitemizeU2FRegistrationCounter attempts to decode the supplied `backend.Item` as
-// a registration counter resource.
-func deitemizeU2FRegistrationCounter(item backend.Item) (services.U2FRegistrationCounter, error) {
-	name, _, err := splitUsernameAndSuffix(string(item.Key))
-	if err != nil {
-		return nil, trace.Wrap(err)
-	}
-	var raw u2fRegistrationCounter
-	if err := json.Unmarshal(item.Value, &raw); err != nil {
-		return nil, trace.Wrap(err)
-	}
-	ctr := services.NewU2FRegistrationCounter(name, raw.Counter)
-	ctr.SetExpiry(item.Expires)
-	ctr.SetResourceID(item.ID)
-	if err := ctr.CheckAndSetDefaults(); err != nil {
-		return nil, trace.Wrap(err)
-	}
-	return ctr, nil
-}
-
-// itemizePasswordHash attempts to encode the supplied password hash as an
-// instance of `backend.Item` suitable for storage.
-func itemizePasswordHash(hash services.PasswordHash) (*backend.Item, error) {
-	if err := hash.CheckAndSetDefaults(); err != nil {
-		return nil, trace.Wrap(err)
-	}
-	item := &backend.Item{
-		Key:     backend.Key(webPrefix, usersPrefix, hash.GetUser(), pwdPrefix),
-		Value:   hash.GetPasswordHash(),
-		Expires: hash.Expiry(),
-		ID:      hash.GetResourceID(),
-	}
-	return item, nil
-}
-
-// deitemizePasswordHash attempts to decode the supplied `backend.Item` as
-// a password hash resource.
-func deitemizePasswordHash(item backend.Item) (services.PasswordHash, error) {
-	name, _, err := splitUsernameAndSuffix(string(item.Key))
-	if err != nil {
-		return nil, trace.Wrap(err)
-	}
-	hash := services.NewPasswordHash(name, item.Value)
-	hash.SetExpiry(item.Expires)
-	hash.SetResourceID(item.ID)
-	if err := hash.CheckAndSetDefaults(); err != nil {
-		return nil, trace.Wrap(err)
-	}
-	return hash, nil
-}
-
 // TODO: convert username/suffix ops to work on bytes by default; string/byte conversion
 // has order N cost.
 
@@ -732,7 +554,7 @@ func collectUserItems(items []backend.Item) (users map[string]userItems, rem []b
 			return nil, nil, err
 		}
 		collector := users[name]
-		if !collector.Set(suffix, &item) {
+		if !collector.Set(suffix, item) {
 			// suffix not recognized, output this item with the rest of the
 			// unhandled items.
 			rem = append(rem, item)
@@ -752,19 +574,19 @@ type userItems struct {
 	u2fCounter      *backend.Item
 }
 
-// Set attempts to set a field by suffix (use nil to clear a field).
-func (u *userItems) Set(suffix string, item *backend.Item) (ok bool) {
+// Set attempts to set a field by suffix.
+func (u *userItems) Set(suffix string, item backend.Item) (ok bool) {
 	switch suffix {
 	case paramsPrefix:
-		u.params = item
+		u.params = &item
 	case pwdPrefix:
-		u.pwd = item
+		u.pwd = &item
 	case totpPrefix:
-		u.totp = item
+		u.totp = &item
 	case u2fRegistrationPrefix:
-		u.u2fRegistration = item
+		u.u2fRegistration = &item
 	case u2fRegistrationCounterPrefix:
-		u.u2fCounter = item
+		u.u2fCounter = &item
 	default:
 		return false
 	}
