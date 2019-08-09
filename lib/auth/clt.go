@@ -23,6 +23,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"net"
 	"net/http"
@@ -52,6 +53,7 @@ import (
 	"github.com/jonboulle/clockwork"
 	"github.com/tstranex/u2f"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
 )
@@ -1421,15 +1423,39 @@ func (c *Client) DeleteWebSession(user string, sid string) error {
 
 // GetUser returns a list of usernames registered in the system
 func (c *Client) GetUser(name string, withSecrets bool) (services.User, error) {
-	// FIXME: withSecrets not propagated.
 	if name == "" {
 		return nil, trace.BadParameter("missing username")
+	}
+	user, err := c.grpcGetUser(name, withSecrets)
+	if err == nil {
+		return user, nil
+	}
+	if grpc.Code(err) != codes.Unimplemented {
+		return nil, trace.Wrap(err)
+	}
+	if withSecrets {
+		return nil, trace.BadParameter("server API appears outdated; cannot get user with secrets")
 	}
 	out, err := c.Get(c.Endpoint("users", name), url.Values{})
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
-	user, err := services.GetUserMarshaler().UnmarshalUser(out.Bytes(), services.SkipValidation())
+	user, err = services.GetUserMarshaler().UnmarshalUser(out.Bytes(), services.SkipValidation())
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+	return user, nil
+}
+
+func (c *Client) grpcGetUser(name string, withSecrets bool) (services.User, error) {
+	clt, err := c.grpc()
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+	user, err := clt.GetUser(context.TODO(), &proto.GetUserRequest{
+		Name:        name,
+		WithSecrets: withSecrets,
+	})
 	if err != nil {
 		return nil, trace.Wrap(err)
 	}
@@ -1438,7 +1464,16 @@ func (c *Client) GetUser(name string, withSecrets bool) (services.User, error) {
 
 // GetUsers returns a list of usernames registered in the system
 func (c *Client) GetUsers(withSecrets bool) ([]services.User, error) {
-	// FIXME: withSecrets not propagated.
+	users, err := c.grpcGetUsers(withSecrets)
+	if err == nil {
+		return users, nil
+	}
+	if grpc.Code(err) != codes.Unimplemented {
+		return nil, trace.Wrap(err)
+	}
+	if withSecrets {
+		return nil, trace.BadParameter("server API appears outdated; cannot get users with secrets")
+	}
 	out, err := c.Get(c.Endpoint("users"), url.Values{})
 	if err != nil {
 		return nil, trace.Wrap(err)
@@ -1447,13 +1482,38 @@ func (c *Client) GetUsers(withSecrets bool) ([]services.User, error) {
 	if err := json.Unmarshal(out.Bytes(), &items); err != nil {
 		return nil, trace.Wrap(err)
 	}
-	users := make([]services.User, len(items))
+	users = make([]services.User, len(items))
 	for i, userBytes := range items {
 		user, err := services.GetUserMarshaler().UnmarshalUser(userBytes, services.SkipValidation())
 		if err != nil {
 			return nil, trace.Wrap(err)
 		}
 		users[i] = user
+	}
+	return users, nil
+}
+
+func (c *Client) grpcGetUsers(withSecrets bool) ([]services.User, error) {
+	clt, err := c.grpc()
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+	stream, err := clt.GetUsers(context.TODO(), &proto.GetUsersRequest{
+		WithSecrets: withSecrets,
+	})
+	if err != nil {
+		return nil, trace.Wrap(err)
+	}
+	var users []services.User
+	for {
+		user, err := stream.Recv()
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return nil, trace.Wrap(err)
+		}
+		users = append(users, user)
 	}
 	return users, nil
 }
