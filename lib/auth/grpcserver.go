@@ -157,7 +157,7 @@ func (g *GRPCServer) GetUser(ctx context.Context, req *proto.GetUserRequest) (*s
 	}
 	v2, ok := user.(*services.UserV2)
 	if !ok {
-		log.Warn("expected type services.UserV2, got %T for user %q", user, user.GetName())
+		log.Warnf("expected type services.UserV2, got %T for user %q", user, user.GetName())
 		return nil, trail.ToGRPC(trace.Errorf("encountered unexpected user type"))
 	}
 	return v2, nil
@@ -175,7 +175,7 @@ func (g *GRPCServer) GetUsers(req *proto.GetUsersRequest, stream proto.AuthServi
 	for _, user := range users {
 		v2, ok := user.(*services.UserV2)
 		if !ok {
-			log.Warn("expected type services.UserV2, got %T for user %q", user, user.GetName())
+			log.Warnf("expected type services.UserV2, got %T for user %q", user, user.GetName())
 			return trail.ToGRPC(trace.Errorf("encountered unexpected user type"))
 		}
 		if err := stream.Send(v2); err != nil {

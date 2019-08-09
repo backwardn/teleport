@@ -1457,7 +1457,7 @@ func (c *Client) grpcGetUser(name string, withSecrets bool) (services.User, erro
 		WithSecrets: withSecrets,
 	})
 	if err != nil {
-		return nil, trace.Wrap(err)
+		return nil, trail.FromGRPC(err)
 	}
 	return user, nil
 }
@@ -1502,7 +1502,7 @@ func (c *Client) grpcGetUsers(withSecrets bool) ([]services.User, error) {
 		WithSecrets: withSecrets,
 	})
 	if err != nil {
-		return nil, trace.Wrap(err)
+		return nil, trail.FromGRPC(err)
 	}
 	var users []services.User
 	for {
@@ -1511,7 +1511,7 @@ func (c *Client) grpcGetUsers(withSecrets bool) ([]services.User, error) {
 			if err == io.EOF {
 				break
 			}
-			return nil, trace.Wrap(err)
+			return nil, trail.FromGRPC(err)
 		}
 		users = append(users, user)
 	}

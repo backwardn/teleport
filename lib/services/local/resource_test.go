@@ -75,17 +75,8 @@ func (r *ResourceSuite) dumpResources(c *check.C) []services.Resource {
 	endKey := backend.RangeEnd(startKey)
 	result, err := r.bk.GetRange(context.TODO(), startKey, endKey, 0)
 	c.Assert(err, check.IsNil)
-	for _, item := range result.Items {
-		c.Logf("ITEM: %q => %q", string(item.Key), string(item.Value))
-	}
-	users, rem, err := collectUserItems(result.Items)
-	c.Logf("Users: %+v", users)
-	c.Logf("Rem: %+v", rem)
 	resources, err := DeitemizeResources(result.Items...)
 	c.Assert(err, check.IsNil)
-	for _, rsc := range resources {
-		c.Logf("RSC: %+v", rsc)
-	}
 	return resources
 }
 
@@ -121,9 +112,7 @@ func (r *ResourceSuite) TestUserResourceWithSecrets(c *check.C) {
 
 func (r *ResourceSuite) runUserResourceTest(c *check.C, withSecrets bool) {
 	alice := newUserTestCase(c, "alice", nil, withSecrets)
-	c.Logf("Alice: %+v", alice)
 	bob := newUserTestCase(c, "bob", nil, withSecrets)
-	c.Logf("Bob: %+v", bob)
 	// Check basic dynamic item creation
 	r.runCreationChecks(c, alice, bob)
 	// Check that dynamically created item is compatible with service
